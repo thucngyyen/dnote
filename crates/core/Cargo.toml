@@ -1,0 +1,25 @@
+[package]
+name = "dnote-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared protocol, HTTP API and sync engine for DNote"
+
+[features]
+default = []
+# HTTP API + storage trait used by both server targets (self-host and Cloudflare).
+server = ["dep:form_urlencoded"]
+# Sync engine, 3-way merge and markdown rendering used by the clients.
+client = ["dep:diffy", "dep:pulldown-cmark", "dep:form_urlencoded"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+base64 = "0.22"
+form_urlencoded = { version = "1", optional = true }
+diffy = { version = "0.4", optional = true }
+pulldown-cmark = { version = "0.13", optional = true, default-features = false, features = ["html"] }
+
+[dev-dependencies]
+pollster = "0.4"

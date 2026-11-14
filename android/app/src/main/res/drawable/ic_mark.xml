@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DNote brand mark (ic_mark), converted from brand/svg. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="70dp" android:height="88dp"
+    android:viewportWidth="70" android:viewportHeight="88">
+    <group android:translateX="-32" android:translateY="-20">
+        <path android:fillColor="#0A0C10" android:pathData="M42,24h36l20,20v54a6,6 0,0 1,-6,6H42a6,6 0,0 1,-6,-6V30a6,6 0,0 1,6,-6z" />
+        <path android:fillColor="#3B82F6" android:pathData="M78,24v14a6,6 0,0 0,6,6h14z" />
+        <path android:fillColor="#F5F7FA" android:pathData="M50,56h32a3,3 0,0 1,0,6h-32a3,3 0,0 1,0,-6z" />
+        <path android:fillColor="#F5F7FA" android:pathData="M50,70h32a3,3 0,0 1,0,6h-32a3,3 0,0 1,0,-6z" />
+        <path android:fillColor="#3B82F6" android:pathData="M50,84h16a3,3 0,0 1,0,6h-16a3,3 0,0 1,0,-6z" />
+    </group>
+</vector>

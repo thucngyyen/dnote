@@ -1,0 +1,19 @@
+[package]
+name = "dnote-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Self-hosted DNote server: one binary, SQLite + plain .md files on disk"
+
+[dependencies]
+dnote-core = { workspace = true, features = ["server"] }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "compression-gzip", "trace"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+pollster = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"

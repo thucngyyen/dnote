@@ -1,0 +1,14 @@
+[package]
+name = "dnote-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DNote on Cloudflare Workers: D1 for metadata, R2 for note bodies"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dnote-core = { workspace = true, features = ["server"] }
+worker = { version = "0.9", features = ["d1"] }
+serde.workspace = true

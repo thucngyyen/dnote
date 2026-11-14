@@ -1,0 +1,11 @@
+target
+build
+web/node_modules
+web/dist
+web/src/wasm
+android
+ios
+data
+.git
+crates/worker/build
+crates/worker/.wrangler

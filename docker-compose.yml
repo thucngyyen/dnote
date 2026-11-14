@@ -1,0 +1,12 @@
+services:
+  dnote:
+    build: .
+    ports:
+      - "8787:8787"
+    environment:
+      # Generate with: openssl rand -hex 24
+      DNOTE_TOKEN: ${DNOTE_TOKEN:?set DNOTE_TOKEN}
+    volumes:
+      # Notes are plain .md files under ./data/notes
+      - ./data:/data
+    restart: unless-stopped

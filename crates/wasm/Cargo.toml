@@ -1,0 +1,19 @@
+[package]
+name = "dnote-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DNote client core for the browser (sync engine, merge, markdown)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+dnote-core = { workspace = true, features = ["client"] }
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+serde-wasm-bindgen = "0.6"
+web-sys = { version = "0.3", features = ["Blob", "Headers", "Request", "RequestInit", "RequestMode", "Response", "Window", "WorkerGlobalScope"] }

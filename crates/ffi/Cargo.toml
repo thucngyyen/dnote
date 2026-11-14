@@ -1,0 +1,24 @@
+[package]
+name = "dnote-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DNote native core for iOS (Swift) and Android (Kotlin) via UniFFI"
+
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+name = "dnote_ffi"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+dnote-core = { workspace = true, features = ["client"] }
+serde_json.workspace = true
+uniffi = { version = "0.32", features = ["cli"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "gzip"] }
+pollster = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
