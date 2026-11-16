@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -14,12 +16,31 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        // The Rust core is built for these ABIs only (scripts/build-android.sh); keep JNA's
+        // other ABIs out so unsupported devices refuse the install instead of crashing.
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+    }
+
+    // Release signing comes from android/keystore.properties (git-ignored, never committed).
+    // Without it, release builds are signed with the debug key so they still install.
+    val keystoreProps = rootProject.file("keystore.properties")
+    signingConfigs {
+        if (keystoreProps.exists()) {
+            val props = Properties().apply { keystoreProps.inputStream().use { load(it) } }
+            create("release") {
+                storeFile = rootProject.file(props.getProperty("storeFile"))
+                storePassword = props.getProperty("storePassword")
+                keyAlias = props.getProperty("keyAlias")
+                keyPassword = props.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
     compileOptions {

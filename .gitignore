@@ -21,3 +21,7 @@ build/
 .env.*
 *.keystore
 *.jks
+
+# Android release signing (local only)
+android/keystore.properties
+android/keystore/
