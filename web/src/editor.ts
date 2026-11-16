@@ -14,6 +14,7 @@ import { HighlightStyle, syntaxHighlighting, indentOnInput, bracketMatching } fr
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { tags as t } from "@lezer/highlight";
+import { livePreview, type LivePreviewOptions } from "./livepreview";
 
 /** Marks programmatic edits (sync merges) so they are not treated as typing. */
 const external = Annotation.define<boolean>();
@@ -69,7 +70,7 @@ export interface Editor {
   focus(): void;
 }
 
-export function createEditor(parent: HTMLElement, onChange: (text: string) => void): Editor {
+export function createEditor(parent: HTMLElement, onChange: (text: string) => void, preview: LivePreviewOptions): Editor {
   const extensions = [
     history(),
     drawSelection(),
@@ -82,6 +83,7 @@ export function createEditor(parent: HTMLElement, onChange: (text: string) => vo
     EditorView.lineWrapping,
     markdown({ base: markdownLanguage, codeLanguages: languages, addKeymap: true }),
     syntaxHighlighting(markdownStyle),
+    livePreview(preview),
     placeholder("Start writing…"),
     keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab]),
     theme,

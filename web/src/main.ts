@@ -85,7 +85,15 @@ async function boot() {
   WS_PATH = workspacePath();
   store = await LocalStore.open();
   settings = await store.get<Settings>("settings");
-  editor = createEditor($("editor"), onEdit);
+  editor = createEditor($("editor"), onEdit, {
+    // Images in the editor: links are relative to the open note; web URLs load as is.
+    async imageUrl(src) {
+      if (/^https?:/i.test(src)) return src;
+      if (/^[a-z][a-z0-9+.-]*:/i.test(src) || !open) return undefined;
+      const path = resolveLink(open.path, src);
+      return path ? imageUrl(path) : undefined;
+    },
+  });
   setMode((localStorage.getItem("dnote.mode") as Mode) ?? "write", false);
   await refresh();
   wireUi();

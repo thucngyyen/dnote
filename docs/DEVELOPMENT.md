@@ -54,6 +54,28 @@ cd android && ./gradlew installDebug
 
 Re-run the build script whenever `crates/core` or `crates/ffi` changes.
 
+### Release APKs
+
+```sh
+cd android && ./gradlew assembleRelease   # app/build/outputs/apk/release/app-release.apk
+```
+
+Release builds are signed with the key described in `android/keystore.properties` (git-ignored):
+
+```properties
+storeFile=keystore/dnote-release.jks
+storePassword=…
+keyAlias=dnote
+keyPassword=…
+```
+
+Without that file the APK is signed with the debug key and the build prints a warning;
+`bundleRelease` refuses to run. Keep the keystore backed up: updates must be signed with the same key
+to install over an existing copy.
+
+Only 64-bit native libraries (`arm64-v8a`, plus `x86_64` for emulators) are built, so DNote doesn't
+install on 32-bit-only Android phones.
+
 ## Mobile apps against a local server
 
 The apps work fully offline; to test sync point them at your machine:

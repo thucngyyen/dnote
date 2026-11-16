@@ -39,8 +39,9 @@ plain files with a clunky sync story. DNote gives you both.
 
 ## Features
 
-- 📝 **Markdown, beautifully.** Live syntax highlighting while you write, a clean reading view, task
-  lists you can tick off, tables, code blocks.
+- 📝 **Markdown, without the symbols.** Write in a live preview: formatting renders as you type,
+  checkboxes are tappable, and lists continue when you press Enter. Underneath, it's still
+  plain Markdown.
 - 📁 **Folders that are folders.** Create, rename and move notes and folders; the structure on disk
   is exactly what you see.
 - 📌 **Pins** for the notes and folders you open every day.
@@ -80,7 +81,8 @@ see [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md).
 server's address and token, and you're done. The apps work fine without a server too.
 
 > The iOS and Android apps aren't in the stores yet; build them from source with the steps in
-> [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+> [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). The Android app needs Android 8 or newer on a 64-bit
+> phone.
 
 ## Built with
 
