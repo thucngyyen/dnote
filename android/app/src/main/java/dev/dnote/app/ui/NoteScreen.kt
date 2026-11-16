@@ -260,14 +260,16 @@ private fun Editor(model: NotesViewModel, session: EditorSession) {
         val b = t.indexOf('\n', value.selection.max).let { if (it < 0) t.length else it }
         TextRange(a, b)
     }
-    // Only the cursor's offset into the line's marker area changes how a line renders.
-    val cursorKey = if (activeLine == null) null else activeLine.start + minOf(value.selection.min - activeLine.start, 8)
+    // Positions past the line's list/quote marker all render the same: cap the key there.
+    val cursorKey = if (activeLine == null) null else activeLine.start + minOf(
+        value.selection.min - activeLine.start,
+        markerLength(value.text.substring(activeLine.start, activeLine.end)),
+    )
     val transformation = remember(colors, activeLine, cursorKey) {
         LivePreviewTransformation(colors, activeLine, if (activeLine == null) null else value.selection.min)
     }
     val currentTransformation by rememberUpdatedState(transformation)
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    val density = LocalDensity.current.density
 
     fun update(raw: TextFieldValue) {
         val next = continueList(value, raw)
@@ -278,6 +280,9 @@ private fun Editor(model: NotesViewModel, session: EditorSession) {
             model.edited()
         }
     }
+
+    // The tap handler below outlives recompositions: always act on the current note.
+    val onToggleTask by rememberUpdatedState { box: TextRange -> update(toggleTask(value, box)) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
@@ -309,7 +314,7 @@ private fun Editor(model: NotesViewModel, session: EditorSession) {
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 12.dp)
                 // Tapping a task box ticks it, without moving the cursor or opening the keyboard.
-                .pointerInput(Unit) {
+                .pointerInput(session) {
                     awaitEachGesture {
                         val down = awaitFirstDown(pass = PointerEventPass.Initial)
                         val l = layout ?: return@awaitEachGesture
@@ -318,7 +323,7 @@ private fun Editor(model: NotesViewModel, session: EditorSession) {
                         down.consume()
                         val up = waitForUpOrCancellation(PointerEventPass.Initial) ?: return@awaitEachGesture
                         up.consume()
-                        update(toggleTask(value, box))
+                        onToggleTask(box)
                     }
                 }
                 .drawWithContent {

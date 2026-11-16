@@ -144,8 +144,16 @@ function build(view: EditorView, opts: LivePreviewOptions): { decorations: Decor
             const close = node.node.lastChild;
             if (close && close.name === "HeaderMark" && close.from > mark.from) deco.push(hide.range(close.from, close.to));
           }
-          return false;
+          // Keep walking: the heading can hold emphasis, code and links.
+          return;
         }
+        if (/^SetextHeading\d$/.test(n)) {
+          // "Title\n=====": hide the underline unless the cursor is on it.
+          const mark = node.node.lastChild;
+          if (mark && mark.name === "HeaderMark" && !isActive(mark.from)) deco.push(hide.range(mark.from, mark.to));
+          return;
+        }
+        if (n === "HeaderMark") return;
         if (n === "EmphasisMark" || n === "StrikethroughMark") {
           if (!isActive(node.from)) deco.push(hide.range(node.from, node.to));
           return;
@@ -178,7 +186,9 @@ function build(view: EditorView, opts: LivePreviewOptions): { decorations: Decor
             deco.push(hide.range(open.from, open.to));
             deco.push(hide.range(close.from, node.to));
           }
-          return false;
+          // Keep walking into the label (emphasis, code). The URL part is hidden as a whole
+          // above, so marks inside it can't produce overlapping hides.
+          return;
         }
         if (n === "Image") {
           if (isActive(node.from)) return false;

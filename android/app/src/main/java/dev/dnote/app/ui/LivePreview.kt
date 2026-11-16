@@ -1,5 +1,8 @@
 package dev.dnote.app.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -57,12 +60,20 @@ class LivePreviewTransformation(
     private val active: TextRange?,
     private val cursor: Int?,
 ) : VisualTransformation {
-    /** The most recent result, for drawing and hit-testing. */
-    var last: Preview? = null
+    /**
+     * The most recent result, for drawing and hit-testing. Snapshot state, so drawing follows
+     * it: ticking a box changes only what's drawn ("[ ]" and "[x]" lay out identically).
+     */
+    var last: Preview? by mutableStateOf(null)
         private set
 
+    private var lastInput: String? = null
+
     override fun filter(text: AnnotatedString): TransformedText {
+        // The text field filters the same text more than once per change; reuse the result.
+        last?.let { if (text.text == lastInput) return it.text }
         val p = buildPreview(text.text, colors, active, cursor)
+        lastInput = text.text
         last = p
         return p.text
     }
@@ -79,6 +90,10 @@ private val taskRx = Regex("^([ \\t]*)([-*+] )(\\[[ xX]\\])(?: |$)")
 private val bulletRx = Regex("^([ \\t]*)([-*+]) ")
 private val orderedRx = Regex("^([ \\t]*)(\\d{1,9}[.)]) ")
 private val quoteRx = Regex("^>[ \\t]?")
+private val markerRx = Regex("^[ \\t]*(?:[-*+] (?:\\[[ xX]\\] ?)?|\\d{1,9}[.)] |> ?)")
+
+/** Length of a line's list/task/quote marker ("  - [ ] " → 8), 0 when there is none. */
+fun markerLength(line: String): Int = markerRx.find(line)?.value?.length ?: 0
 private val boldRx = Regex("(\\*\\*|__)(?=\\S)(.+?)(?<=\\S)\\1")
 private val italicRx = Regex("(?<![*_\\w])([*_])(?=\\S)([^*_\\n]+?)(?<=\\S)\\1(?![*_\\w])")
 private val strikeRx = Regex("~~(?=\\S)(.+?)(?<=\\S)~~")
@@ -86,113 +101,60 @@ private val codeRx = Regex("`([^`\\n]+)`")
 private val linkRx = Regex("(?<!!)\\[([^\\]\\n]+)\\]\\(([^)\\n]+)\\)")
 private val imageRx = Regex("!\\[[^\\]\\n]*\\]\\([^)\\n]+\\)")
 
+/** A widget found on one line, at line-relative original offsets. */
+private sealed interface LineWidget {
+    data class Task(val box: Int, val checked: Boolean) : LineWidget
+    data class Bullet(val at: Int) : LineWidget
+    data class Quote(val length: Int) : LineWidget
+    data object Rule : LineWidget
+}
+
+/** How one line is shown. Offsets are relative to the line start. */
+private class LineStyle(
+    val hidden: IntArray,
+    val spans: List<Triple<SpanStyle, Int, Int>>,
+    val widgets: List<LineWidget>,
+)
+
+/** Everything a line's rendering depends on. */
+private data class LineKey(
+    val line: String,
+    val colors: PreviewColors,
+    val inFence: Boolean,
+    /** Cursor column capped at the marker end ([markerLength]); null when not the active line. */
+    val cursor: Int?,
+)
+
+/**
+ * Styled lines, reused across keystrokes: typing restyles only the line being edited (and the
+ * line the cursor left), which keeps long notes responsive.
+ */
+private val lineCache = object : LinkedHashMap<LineKey, LineStyle>(1024, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<LineKey, LineStyle>?) = size > 8192
+}
+
 fun buildPreview(s: String, c: PreviewColors, active: TextRange?, cursor: Int?): Preview {
     val hidden = BooleanArray(s.length)
     val spans = ArrayList<Triple<SpanStyle, Int, Int>>()
-    val pending = ArrayList<(IntArray) -> Widget>()
-    val code = ArrayList<IntRange>()
-    fun style(st: SpanStyle, from: Int, to: Int) { if (to > from) spans += Triple(st, from, to) }
-    fun hide(from: Int, to: Int) { for (i in from until to) hidden[i] = true }
-    fun isActive(pos: Int): Boolean {
-        val a = active ?: return false
-        return pos in a.min..a.max
-    }
+    val found = ArrayList<Pair<Int, LineWidget>>()
 
-    // Blocks, line by line.
     var inFence = false
     var start = 0
     while (start <= s.length) {
         val nl = s.indexOf('\n', start).let { if (it < 0) s.length else it }
         val line = s.substring(start, nl)
         val ls = start
-        val lineActive = isActive(ls)
+        val lineActive = active != null && ls in active.min..active.max
+        val col = if (lineActive && cursor != null) minOf((cursor - ls).coerceAtLeast(0), markerLength(line)) else null
+        val key = LineKey(line, c, inFence, col)
+        val st = lineCache.getOrPut(key) { styleLine(line, c, inFence, lineActive, col) }
+        for (i in st.hidden) hidden[ls + i] = true
+        for ((sp, f, t) in st.spans) spans += Triple(sp, ls + f, ls + t)
+        for (w in st.widgets) found += ls to w
+        if (line.trimStart().startsWith("```")) inFence = !inFence
         start = nl + 1
-        val fenceLine = line.trimStart().startsWith("```")
-        if (fenceLine || inFence) {
-            style(SpanStyle(fontFamily = FontFamily.Monospace, fontSize = 0.9.em, background = c.codeBg, color = if (fenceLine) c.faint else c.text), ls, nl)
-            code += ls until nl
-            if (fenceLine) inFence = !inFence
-            if (nl >= s.length) break else continue
-        }
-        headingRx.find(line)?.let { m ->
-            val level = m.groupValues[1].length
-            val size = listOf(1.5f, 1.3f, 1.15f, 1.05f, 1f, 1f)[level - 1]
-            style(SpanStyle(fontWeight = if (level <= 2) FontWeight.Bold else FontWeight.SemiBold, fontSize = size.em, letterSpacing = (-0.02).em, color = c.text), ls, nl)
-            style(SpanStyle(color = c.faint), ls, ls + m.range.last + 1)
-            if (!lineActive) hide(ls, ls + m.range.last + 1)
-        } ?: ruleRx.find(line)?.let {
-            if (!lineActive) {
-                style(SpanStyle(color = Color.Transparent), ls, nl)
-                pending += { map -> Widget.Rule(map[ls]) }
-            } else style(SpanStyle(color = c.faint), ls, nl)
-        } ?: quoteRx.find(line)?.let { m ->
-            style(SpanStyle(color = c.muted), ls, nl)
-            if (lineActive) style(SpanStyle(color = c.accent), ls, ls + m.range.last + 1) else hide(ls, ls + m.range.last + 1)
-            pending += { map -> Widget.Quote(map[ls], map[nl]) }
-        } ?: taskRx.find(line)?.let { m ->
-            val marker = m.groups[2]!!.range.let { (ls + it.first) to (ls + it.last + 1) }
-            val box = m.groups[3]!!.range.let { (ls + it.first) to (ls + it.last + 1) }
-            val checked = s.substring(box.first, box.second).lowercase() == "[x]"
-            val textStart = box.second + 1
-            if (lineActive && cursor != null && cursor in ls until textStart) {
-                style(SpanStyle(color = c.accent), marker.first, box.second)
-            } else {
-                hide(marker.first, marker.second)
-                // "[" and "]" stay (transparent, spaced out to make room for the drawn box); the
-                // " "/"x" between them is hidden so ticked and unticked boxes are the same width.
-                hide(box.first + 1, box.first + 2)
-                style(SpanStyle(color = Color.Transparent, letterSpacing = 0.5.em), box.first, box.second)
-                pending += { map -> Widget.Task(map[box.first], checked, TextRange(box.first, box.second)) }
-            }
-            if (checked && textStart < nl) style(SpanStyle(color = c.faint, textDecoration = TextDecoration.LineThrough), textStart, nl)
-        } ?: bulletRx.find(line)?.let { m ->
-            val mark = ls + m.groups[2]!!.range.first
-            if (lineActive && cursor != null && cursor in ls..mark) {
-                style(SpanStyle(color = c.accent), mark, mark + 1)
-            } else {
-                style(SpanStyle(color = Color.Transparent), mark, mark + 1)
-                pending += { map -> Widget.Bullet(map[mark]) }
-            }
-        } ?: orderedRx.find(line)?.let { m ->
-            m.groups[2]!!.range.let { style(SpanStyle(color = c.accent), ls + it.first, ls + it.last + 1) }
-        }
         if (nl >= s.length) break
     }
-
-    // Inline syntax, outside code.
-    fun each(rx: Regex, body: (MatchResult) -> Unit) {
-        rx.findAll(s).forEach { m -> if (code.none { it.first < m.range.last + 1 && m.range.first < it.last + 1 }) body(m) }
-    }
-    fun marks(m: MatchResult, n: Int) {
-        val a = m.range.first
-        val b = m.range.last + 1
-        if (isActive(a)) {
-            style(SpanStyle(color = c.faint), a, a + n)
-            style(SpanStyle(color = c.faint), b - n, b)
-        } else {
-            hide(a, a + n)
-            hide(b - n, b)
-        }
-    }
-    each(codeRx) { m ->
-        style(SpanStyle(fontFamily = FontFamily.Monospace, fontSize = 0.9.em, background = c.codeBg), m.range.first, m.range.last + 1)
-        code += m.range
-        marks(m, 1)
-    }
-    each(boldRx) { m -> style(SpanStyle(fontWeight = FontWeight.Bold, color = c.text), m.range.first, m.range.last + 1); marks(m, 2) }
-    each(italicRx) { m -> style(SpanStyle(fontStyle = FontStyle.Italic), m.range.first, m.range.last + 1); marks(m, 1) }
-    each(strikeRx) { m -> style(SpanStyle(textDecoration = TextDecoration.LineThrough), m.range.first, m.range.last + 1); marks(m, 2) }
-    each(linkRx) { m ->
-        val label = m.groups[1]!!.range
-        style(SpanStyle(color = c.accent, fontWeight = FontWeight.Medium), label.first, label.last + 1)
-        if (isActive(m.range.first)) {
-            style(SpanStyle(color = c.faint), label.last + 1, m.range.last + 1)
-        } else {
-            hide(m.range.first, label.first)
-            hide(label.last + 1, m.range.last + 1)
-        }
-    }
-    each(imageRx) { m -> style(SpanStyle(color = c.faint, fontSize = 0.88.em), m.range.first, m.range.last + 1) }
 
     // Offsets: original -> shown (hidden characters collapse), and shown -> original.
     val toShown = IntArray(s.length + 1)
@@ -219,7 +181,114 @@ fun buildPreview(s: String, c: PreviewColors, active: TextRange?, cursor: Int?):
         override fun originalToTransformed(offset: Int) = toShown[offset.coerceIn(0, s.length)]
         override fun transformedToOriginal(offset: Int) = toOriginal[offset.coerceIn(0, shownLength)]
     }
-    return Preview(TransformedText(out.toAnnotatedString(), mapping), pending.map { it(toShown) })
+    val widgets = found.map { (ls, w) ->
+        when (w) {
+            is LineWidget.Task -> Widget.Task(toShown[ls + w.box], w.checked, TextRange(ls + w.box, ls + w.box + 3))
+            is LineWidget.Bullet -> Widget.Bullet(toShown[ls + w.at])
+            is LineWidget.Quote -> Widget.Quote(toShown[ls], toShown[ls + w.length])
+            LineWidget.Rule -> Widget.Rule(toShown[ls])
+        }
+    }
+    return Preview(TransformedText(out.toAnnotatedString(), mapping), widgets)
+}
+
+/**
+ * Styles one line. [col] is the cursor column (capped at the marker end) on the active line.
+ * Every rule is line-local except fenced code, whose state comes in as [inFence].
+ */
+private fun styleLine(line: String, c: PreviewColors, inFence: Boolean, active: Boolean, col: Int?): LineStyle {
+    val n = line.length
+    val hidden = ArrayList<Int>()
+    val spans = ArrayList<Triple<SpanStyle, Int, Int>>()
+    val widgets = ArrayList<LineWidget>()
+    fun style(st: SpanStyle, from: Int, to: Int) { if (to > from) spans += Triple(st, from, to) }
+    fun hide(from: Int, to: Int) { for (i in from until to) hidden += i }
+
+    val fenceLine = line.trimStart().startsWith("```")
+    if (fenceLine || inFence) {
+        style(SpanStyle(fontFamily = FontFamily.Monospace, fontSize = 0.9.em, background = c.codeBg, color = if (fenceLine) c.faint else c.text), 0, n)
+        return LineStyle(hidden.toIntArray(), spans, widgets)
+    }
+
+    headingRx.find(line)?.let { m ->
+        val level = m.groupValues[1].length
+        val size = listOf(1.5f, 1.3f, 1.15f, 1.05f, 1f, 1f)[level - 1]
+        style(SpanStyle(fontWeight = if (level <= 2) FontWeight.Bold else FontWeight.SemiBold, fontSize = size.em, letterSpacing = (-0.02).em, color = c.text), 0, n)
+        style(SpanStyle(color = c.faint), 0, m.range.last + 1)
+        if (!active) hide(0, m.range.last + 1)
+    } ?: ruleRx.find(line)?.let {
+        if (!active) {
+            style(SpanStyle(color = Color.Transparent), 0, n)
+            widgets += LineWidget.Rule
+        } else style(SpanStyle(color = c.faint), 0, n)
+    } ?: quoteRx.find(line)?.let { m ->
+        style(SpanStyle(color = c.muted), 0, n)
+        if (active) style(SpanStyle(color = c.accent), 0, m.range.last + 1) else hide(0, m.range.last + 1)
+        widgets += LineWidget.Quote(n)
+    } ?: taskRx.find(line)?.let { m ->
+        val marker = m.groups[2]!!.range
+        val box = m.groups[3]!!.range
+        val checked = line.substring(box.first, box.last + 1).lowercase() == "[x]"
+        val textStart = box.last + 2
+        if (active && col != null && col < textStart) {
+            style(SpanStyle(color = c.accent), marker.first, box.last + 1)
+        } else {
+            hide(marker.first, marker.last + 1)
+            // "[" and "]" stay (transparent, spaced out to make room for the drawn box); the
+            // " "/"x" between them is hidden so ticked and unticked boxes are the same width.
+            hide(box.first + 1, box.first + 2)
+            style(SpanStyle(color = Color.Transparent, letterSpacing = 0.5.em), box.first, box.last + 1)
+            widgets += LineWidget.Task(box.first, checked)
+        }
+        if (checked && textStart < n) style(SpanStyle(color = c.faint, textDecoration = TextDecoration.LineThrough), textStart, n)
+    } ?: bulletRx.find(line)?.let { m ->
+        val mark = m.groups[2]!!.range.first
+        if (active && col != null && col <= mark) {
+            style(SpanStyle(color = c.accent), mark, mark + 1)
+        } else {
+            style(SpanStyle(color = Color.Transparent), mark, mark + 1)
+            widgets += LineWidget.Bullet(mark)
+        }
+    } ?: orderedRx.find(line)?.let { m ->
+        m.groups[2]!!.range.let { style(SpanStyle(color = c.accent), it.first, it.last + 1) }
+    }
+
+    // Inline syntax, outside inline code.
+    val code = ArrayList<IntRange>()
+    fun each(rx: Regex, body: (MatchResult) -> Unit) {
+        rx.findAll(line).forEach { m -> if (code.none { it.first < m.range.last + 1 && m.range.first < it.last + 1 }) body(m) }
+    }
+    fun marks(m: MatchResult, k: Int) {
+        val a = m.range.first
+        val b = m.range.last + 1
+        if (active) {
+            style(SpanStyle(color = c.faint), a, a + k)
+            style(SpanStyle(color = c.faint), b - k, b)
+        } else {
+            hide(a, a + k)
+            hide(b - k, b)
+        }
+    }
+    each(codeRx) { m ->
+        style(SpanStyle(fontFamily = FontFamily.Monospace, fontSize = 0.9.em, background = c.codeBg), m.range.first, m.range.last + 1)
+        code += m.range
+        marks(m, 1)
+    }
+    each(boldRx) { m -> style(SpanStyle(fontWeight = FontWeight.Bold, color = c.text), m.range.first, m.range.last + 1); marks(m, 2) }
+    each(italicRx) { m -> style(SpanStyle(fontStyle = FontStyle.Italic), m.range.first, m.range.last + 1); marks(m, 1) }
+    each(strikeRx) { m -> style(SpanStyle(textDecoration = TextDecoration.LineThrough), m.range.first, m.range.last + 1); marks(m, 2) }
+    each(linkRx) { m ->
+        val label = m.groups[1]!!.range
+        style(SpanStyle(color = c.accent, fontWeight = FontWeight.Medium), label.first, label.last + 1)
+        if (active) {
+            style(SpanStyle(color = c.faint), label.last + 1, m.range.last + 1)
+        } else {
+            hide(m.range.first, label.first)
+            hide(label.last + 1, m.range.last + 1)
+        }
+    }
+    each(imageRx) { m -> style(SpanStyle(color = c.faint, fontSize = 0.88.em), m.range.first, m.range.last + 1) }
+    return LineStyle(hidden.toIntArray(), spans, widgets)
 }
 
 /** Draws bullets, task boxes, quote bars and rules over the laid-out text. */
@@ -233,7 +302,8 @@ fun DrawScope.drawPreview(p: Preview, layout: TextLayoutResult, c: PreviewColors
             val cy = (layout.getLineTop(line) + layout.getLineBottom(line)) / 2
             drawCircle(c.faint, radius = 2.8f * density, center = Offset(b.center.x, cy + 1f * density))
         }
-        is Widget.Task -> if (w.at + 2 < n) {
+        // "[]" (the inner character is hidden): the box needs "[" and "]" at w.at, w.at + 1.
+        is Widget.Task -> if (w.at + 1 < n) {
             val first = box(w.at)
             val line = layout.getLineForOffset(w.at)
             val cy = (layout.getLineTop(line) + layout.getLineBottom(line)) / 2 + 1f * density
@@ -272,7 +342,7 @@ fun DrawScope.drawPreview(p: Preview, layout: TextLayoutResult, c: PreviewColors
 fun taskAt(p: Preview, layout: TextLayoutResult, position: Offset, density: Float): TextRange? {
     val n = layout.layoutInput.text.length
     for (w in p.widgets) {
-        if (w !is Widget.Task || w.at + 2 >= n) continue
+        if (w !is Widget.Task || w.at + 1 >= n) continue
         val a = layout.getBoundingBox(w.at)
         val line = layout.getLineForOffset(w.at)
         val hit = Rect(a.left - 10 * density, layout.getLineTop(line), a.left + 28 * density, layout.getLineBottom(line))
@@ -299,11 +369,12 @@ fun continueList(prev: TextFieldValue, next: TextFieldValue): TextFieldValue {
     if (next.text.getOrNull(at) != '\n' || next.text.removeRange(at, at + 1) != prev.text) return next
     val lineStart = prev.text.lastIndexOf('\n', at - 1) + 1
     val cont = listContinuation(prev.text.substring(lineStart, at)) ?: return next
-    return if (cont.isEmpty()) {
-        // Empty item: drop its marker and stay on the (now blank) line.
-        TextFieldValue(prev.text.removeRange(lineStart, at), TextRange(lineStart))
+    return if (cont.endList) {
+        // Empty item: replace its marker ("> " inside a quote) and stay on this line.
+        val text = prev.text.substring(0, lineStart) + cont.prefix + prev.text.substring(at)
+        TextFieldValue(text, TextRange(lineStart + cont.prefix.length))
     } else {
-        val text = prev.text.substring(0, at) + "\n" + cont + prev.text.substring(at)
-        TextFieldValue(text, TextRange(at + 1 + cont.length))
+        val text = prev.text.substring(0, at) + "\n" + cont.prefix + prev.text.substring(at)
+        TextFieldValue(text, TextRange(at + 1 + cont.prefix.length))
     }
 }

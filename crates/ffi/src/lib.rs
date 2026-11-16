@@ -750,12 +750,30 @@ pub fn render_markdown(markdown: String, note_path: String) -> String {
     dnote_core::markdown::to_html_for(&markdown, &note_path)
 }
 
+/// What Enter does in a list (see [`list_continuation`]).
+#[derive(uniffi::Record)]
+pub struct ListEnter {
+    /// true: the item was empty, so replace the line's text before the cursor with `prefix`
+    /// and don't add a newline. false: insert a newline followed by `prefix`.
+    pub end_list: bool,
+    pub prefix: String,
+}
+
 /// What Enter does in a list, from the current line's text before the cursor: `None` for a
-/// plain newline, `""` to end the list (remove the empty item's marker), otherwise the prefix
-/// for the next line (`"- "`, `"3. "`, `"- [ ] "`).
+/// plain newline, otherwise how to continue (`"- "`, `"3. "`, `"- [ ] "`) or end the list.
 #[uniffi::export]
-pub fn list_continuation(line_before_cursor: String) -> Option<String> {
-    dnote_core::markdown::list_continuation(&line_before_cursor)
+pub fn list_continuation(line_before_cursor: String) -> Option<ListEnter> {
+    use dnote_core::markdown::ListEnter as E;
+    dnote_core::markdown::list_continuation(&line_before_cursor).map(|e| match e {
+        E::Continue(prefix) => ListEnter {
+            end_list: false,
+            prefix,
+        },
+        E::End(prefix) => ListEnter {
+            end_list: true,
+            prefix,
+        },
+    })
 }
 
 /// Turn a link from rendered HTML (a vault path, possibly percent-encoded) into a vault path.

@@ -70,7 +70,8 @@ struct MarkdownTextView: UIViewRepresentable {
         weak var textView: UITextView?
         /// The paragraph shown as raw Markdown (the one with the cursor), nil when not editing.
         private var activeRange: NSRange?
-        private var cursorInLine = 0
+        /// Where the cursor sits relative to the active line's list marker (see `markerKey`).
+        private var cursorKey = 0
         private var restyling = false
 
         init(_ parent: MarkdownTextView) {
@@ -94,22 +95,61 @@ struct MarkdownTextView: UIViewRepresentable {
             if overlap > 0 { DispatchQueue.main.async { Self.revealCaret(tv) } }
         }
 
-        /// Re-style the whole note for the current cursor line (note-sized documents: cheap).
-        func restyle(_ tv: UITextView) {
+        /// Text changed by the edit in progress (from `shouldChangeTextIn`), and whether it
+        /// touched backticks, which can open or close a code fence and restyle everything after.
+        private var pendingEdit: NSRange?
+        private var pendingFull = false
+
+        /// Re-style for the current cursor line. Only the lines that can have changed are
+        /// restyled: the edited text (`edited`), the line the cursor left and the line it's on.
+        /// `full` (or an edit of unknown extent) restyles the whole note.
+        func restyle(_ tv: UITextView, edited: NSRange? = nil, full: Bool = false) {
             guard !restyling else { return }
             restyling = true
             defer { restyling = false }
             let selected = tv.selectedRange
             let ns = tv.text as NSString
+            let previous = activeRange
             activeRange = tv.isFirstResponder ? ns.paragraphRange(for: selected) : nil
-            cursorInLine = activeRange.map { selected.location - $0.location } ?? 0
-            MarkdownHighlighter.apply(to: tv.textStorage, active: activeRange, cursor: tv.isFirstResponder ? selected.location : nil)
+            cursorKey = activeRange.map { Self.markerKey(ns, line: $0, cursor: selected.location) } ?? 0
+            let cursor = tv.isFirstResponder ? selected.location : nil
+            if full {
+                MarkdownHighlighter.apply(to: tv.textStorage, active: activeRange, cursor: cursor)
+            } else {
+                var regions = [previous, activeRange].compactMap { $0 }
+                if let edited { regions.append(edited) }
+                if regions.isEmpty { regions.append(NSRange(location: min(selected.location, ns.length), length: 0)) }
+                for r in regions {
+                    MarkdownHighlighter.apply(to: tv.textStorage, active: activeRange, cursor: cursor, region: r)
+                }
+            }
             if tv.selectedRange != selected { tv.selectedRange = selected }
             tv.typingAttributes = MarkdownHighlighter.baseAttributes
         }
 
+        /// The cursor's column, capped at the end of the line's list/quote marker: positions
+        /// past the marker all render the same, so moving among them needs no restyle.
+        static func markerKey(_ ns: NSString, line: NSRange, cursor: Int) -> Int {
+            let text = ns.substring(with: line)
+            let marker = MarkdownHighlighter.markerLength(text)
+            return min(cursor - line.location, marker)
+        }
+
         func textViewDidChange(_ tv: UITextView) {
-            restyle(tv)
+            // While composing (Japanese, Chinese, ...) leave the marked text alone; the commit
+            // triggers another change.
+            if tv.markedTextRange == nil {
+                // An edit we didn't see coming (made on the text storage directly) restyles it all.
+                let edited = pendingEdit
+                let ns = tv.text as NSString
+                let fence = edited.map { e -> Bool in
+                    let loc = min(e.location, ns.length)
+                    return ns.substring(with: ns.paragraphRange(for: NSRange(location: loc, length: min(e.length, ns.length - loc)))).contains("```")
+                } ?? true
+                restyle(tv, edited: edited, full: edited == nil || pendingFull || fence)
+                pendingEdit = nil
+                pendingFull = false
+            }
             parent.session.text = tv.text
             parent.onEdit()
             // Re-styling resets layout, which can stop UITextView from following the caret.
@@ -123,13 +163,13 @@ struct MarkdownTextView: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ tv: UITextView) {
-            guard !restyling else { return }
+            guard !restyling, tv.markedTextRange == nil else { return }
             let ns = tv.text as NSString
             let selected = tv.selectedRange
             let paragraph = tv.isFirstResponder ? ns.paragraphRange(for: selected) : nil
-            // Only the cursor's line matters, and the marker area within a list line.
-            let offset = paragraph.map { selected.location - $0.location } ?? 0
-            if paragraph != activeRange || (min(offset, 8) != min(cursorInLine, 8)) { restyle(tv) }
+            // Only the cursor's line matters, and where it is relative to that line's marker.
+            let key = paragraph.map { Self.markerKey(ns, line: $0, cursor: selected.location) } ?? 0
+            if paragraph != activeRange || key != cursorKey { restyle(tv) }
         }
 
         func textViewShouldBeginEditing(_ tv: UITextView) -> Bool {
@@ -145,23 +185,28 @@ struct MarkdownTextView: UIViewRepresentable {
 
         /// Enter continues lists, quotes and task lists; on an empty item it ends the list.
         func textView(_ tv: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+            // Remember what changes, so textViewDidChange restyles just those lines.
+            let replaced = (tv.text as NSString).substring(with: range)
+            let changed = NSRange(location: range.location, length: (text as NSString).length)
+            pendingEdit = pendingEdit.map { NSUnionRange($0, changed) } ?? changed
+            if replaced.contains("`") || text.contains("`") { pendingFull = true }
             guard text == "\n", tv.markedTextRange == nil else { return true }
             let ns = tv.text as NSString
             let lineStart = ns.lineRange(for: NSRange(location: range.location, length: 0)).location
             let before = ns.substring(with: NSRange(location: lineStart, length: range.location - lineStart))
             guard let next = listContinuation(lineBeforeCursor: before) else { return true }
-            if next.isEmpty {
-                // Empty item: remove its marker and stay on this (now blank) line.
+            if next.endList {
+                // Empty item: replace its marker ("> " inside a quote) and stay on this line.
                 let lineEnd = NSMaxRange(range)
                 guard let start = tv.position(from: tv.beginningOfDocument, offset: lineStart),
                       let end = tv.position(from: tv.beginningOfDocument, offset: lineEnd),
                       let r = tv.textRange(from: start, to: end) else { return true }
-                tv.replace(r, withText: "")
+                tv.replace(r, withText: next.prefix)
             } else {
                 guard let start = tv.position(from: tv.beginningOfDocument, offset: range.location),
                       let end = tv.position(from: start, offset: range.length),
                       let r = tv.textRange(from: start, to: end) else { return true }
-                tv.replace(r, withText: "\n" + next)
+                tv.replace(r, withText: "\n" + next.prefix)
             }
             tv.scrollRangeToVisible(tv.selectedRange)
             return false
@@ -176,7 +221,11 @@ struct MarkdownTextView: UIViewRepresentable {
             let checked = ns.substring(with: inner) != " "
             let selected = tv.selectedRange
             tv.textStorage.replaceCharacters(in: inner, with: checked ? " " : "x")
+            pendingEdit = inner
             tv.selectedRange = selected
+            // Ticking is its own inverse, so undo (and redo) just ticks again.
+            tv.undoManager?.registerUndo(withTarget: self) { $0.toggleTask(range) }
+            tv.undoManager?.setActionName(checked ? "Untick" : "Tick")
             UISelectionFeedbackGenerator().selectionChanged()
             textViewDidChange(tv)
         }
@@ -324,10 +373,28 @@ final class MarkdownUITextView: UITextView, UIGestureRecognizerDelegate {
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let hit = super.hitTest(point, with: event)
+        // UIKit also hit-tests mid-touch with other (or no) events: leave the flag alone then.
         guard hit != nil, event?.type == .touches else { return hit }
         touchOnTask = taskBox(at: point) != nil
         // Keep the touch on this view so the text-selection gestures of subviews don't see it.
         return touchOnTask ? self : hit
+    }
+
+    // The flag only matters for the touch that set it. Clear it once that touch has been fully
+    // handled (UITextView may try to begin editing while the touch ends), so a later
+    // programmatic becomeFirstResponder() isn't refused.
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        clearTouchOnTaskSoon()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        clearTouchOnTaskSoon()
+    }
+
+    private func clearTouchOnTaskSoon() {
+        DispatchQueue.main.async { [weak self] in self?.touchOnTask = false }
     }
     private lazy var taskTap: UITapGestureRecognizer = {
         let g = UITapGestureRecognizer(target: self, action: #selector(tappedTask(_:)))
@@ -366,6 +433,7 @@ final class MarkdownUITextView: UITextView, UIGestureRecognizerDelegate {
 
     @objc private func tappedTask(_ g: UITapGestureRecognizer) {
         if let r = taskBox(at: g.location(in: self)) { onToggleTask?(r) }
+        clearTouchOnTaskSoon()
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
@@ -414,7 +482,12 @@ final class MarkdownLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         let chars = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
         storage.enumerateAttribute(.dnQuote, in: chars) { value, range, _ in
             guard value != nil else { return }
-            let g = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            // Start at the first visible character: hidden glyphs at the start of a line ("> ")
+            // can be laid out at the end of the previous line, which would stretch the bar up.
+            var start = range.location
+            while start < NSMaxRange(range) - 1, storage.attribute(.dnHidden, at: start, effectiveRange: nil) != nil { start += 1 }
+            let visible = NSRange(location: start, length: NSMaxRange(range) - start)
+            let g = glyphRange(forCharacterRange: visible, actualCharacterRange: nil)
             var top = CGFloat.greatestFiniteMagnitude, bottom: CGFloat = 0
             enumerateLineFragments(forGlyphRange: g) { rect, _, _, _, _ in
                 top = min(top, rect.minY)
@@ -515,6 +588,12 @@ enum MarkdownHighlighter {
     private static let bullet = rx(#"^([ \t]*)([-*+]) "#)
     private static let ordered = rx(#"^([ \t]*)(\d{1,9}[.)]) "#)
     private static let quote = rx(#"^>[ \t]?"#)
+    private static let marker = rx(#"^[ \t]*(?:[-*+] (?:\[[ xX]\] ?)?|\d{1,9}[.)] |> ?)"#)
+
+    /// Length of a line's list/task/quote marker ("  - [ ] " → 8), 0 when there is none.
+    static func markerLength(_ line: String) -> Int {
+        marker.firstMatch(in: line, range: NSRange(location: 0, length: (line as NSString).length))?.range.length ?? 0
+    }
     // Inline syntax, matched against the whole note.
     private static let bold = rx(#"(\*\*|__)(?=\S)(.+?)(?<=\S)\1"#)
     private static let italic = rx(#"(?<![\*_\w])([\*_])(?=\S)([^\*_\n]+?)(?<=\S)\1(?![\*_\w])"#)
@@ -529,9 +608,32 @@ enum MarkdownHighlighter {
         return s
     }
 
-    static func apply(to s: NSMutableAttributedString, active: NSRange?, cursor: Int?) {
+    /// Whether the line starting at `location` is inside a fenced code block: an odd number of
+    /// fence lines ("```") before it.
+    static func inFence(_ ns: NSString, before location: Int) -> Bool {
+        var open = false
+        var search = NSRange(location: 0, length: location)
+        while true {
+            let r = ns.range(of: "```", options: [], range: search)
+            guard r.location != NSNotFound else { break }
+            let line = ns.lineRange(for: NSRange(location: r.location, length: 0))
+            let lead = ns.substring(with: NSRange(location: line.location, length: r.location - line.location))
+            if lead.allSatisfy({ $0 == " " || $0 == "\t" }) { open.toggle() }
+            let next = NSMaxRange(line)
+            guard next < location else { break }
+            search = NSRange(location: next, length: location - next)
+        }
+        return open
+    }
+
+    /// Styles `region` (whole lines; the whole note when nil). Every rule is line-local except
+    /// fenced code, whose state is worked out from the text before the region.
+    static func apply(to s: NSMutableAttributedString, active: NSRange?, cursor: Int?, region: NSRange? = nil) {
         let ns = s.string as NSString
-        let full = NSRange(location: 0, length: s.length)
+        let full = region.map { r -> NSRange in
+            let loc = min(r.location, ns.length)
+            return ns.paragraphRange(for: NSRange(location: loc, length: min(r.length, ns.length - loc)))
+        } ?? NSRange(location: 0, length: s.length)
         func isActive(_ loc: Int) -> Bool {
             guard let a = active else { return false }
             return a.length == 0 ? loc == a.location : NSLocationInRange(loc, a)
@@ -544,9 +646,9 @@ enum MarkdownHighlighter {
         var code: [NSRange] = []
 
         // Blocks, line by line.
-        var inFence = false
-        var pos = 0
-        while pos < ns.length {
+        var inFence = full.location > 0 && Self.inFence(ns, before: full.location)
+        var pos = full.location
+        while pos < NSMaxRange(full) {
             let lineRange = ns.lineRange(for: NSRange(location: pos, length: 0))
             pos = NSMaxRange(lineRange)
             var contentLength = lineRange.length
