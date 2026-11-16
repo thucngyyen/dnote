@@ -65,3 +65,15 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 }
+
+// Without android/keystore.properties, release builds are signed with the debug key: fine for
+// trying an APK, never for publishing. Say so on every release build, and refuse to produce a
+// Play Store bundle that way.
+if (!rootProject.file("keystore.properties").exists()) {
+    tasks.matching { it.name == "assembleRelease" }.configureEach {
+        doLast { logger.warn("warning: android/keystore.properties not found; this release APK is signed with the DEBUG key") }
+    }
+    tasks.matching { it.name == "bundleRelease" }.configureEach {
+        doFirst { throw GradleException("android/keystore.properties not found: refusing to build a release bundle signed with the debug key") }
+    }
+}

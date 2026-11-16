@@ -81,7 +81,8 @@ see [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md).
 server's address and token, and you're done. The apps work fine without a server too.
 
 > The iOS and Android apps aren't in the stores yet; build them from source with the steps in
-> [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+> [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md). The Android app needs Android 8 or newer on a 64-bit
+> phone.
 
 ## Built with
 
