@@ -750,6 +750,14 @@ pub fn render_markdown(markdown: String, note_path: String) -> String {
     dnote_core::markdown::to_html_for(&markdown, &note_path)
 }
 
+/// What Enter does in a list, from the current line's text before the cursor: `None` for a
+/// plain newline, `""` to end the list (remove the empty item's marker), otherwise the prefix
+/// for the next line (`"- "`, `"3. "`, `"- [ ] "`).
+#[uniffi::export]
+pub fn list_continuation(line_before_cursor: String) -> Option<String> {
+    dnote_core::markdown::list_continuation(&line_before_cursor)
+}
+
 /// Turn a link from rendered HTML (a vault path, possibly percent-encoded) into a vault path.
 #[uniffi::export]
 pub fn resolve_link(note_path: String, href: String) -> Option<String> {

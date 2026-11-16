@@ -49,6 +49,21 @@ Row actions (long-press / context menu / swipe): Pin/Unpin, Tags…, Rename, Del
 
 Note screen: back, title, Write/Read toggle, pin toggle, tag button (sheet/menu with check marks + "New tag…"), more (share, rename, delete). Write mode has the formatting bar above the keyboard including an **image** button (photo picker → saved to `Attachments/`, Markdown inserted at the cursor). Read mode renders images.
 
+## Editor (all platforms)
+
+Write mode is a **live preview**. The file is always plain Markdown, but it reads like the
+rendered note:
+
+- Syntax (`#`, `**`, `_`, `` ` ``, `~~`, `[`…`](url)`, `>`) is hidden on every line except the
+  one with the cursor, which shows its raw Markdown so it can be edited.
+- Bullets are drawn as dots, `---` as a rule, quotes with a blue bar.
+- Task items are real checkboxes: tapping/clicking one ticks it (rewriting `[ ]` ↔ `[x]`)
+  without moving the cursor or raising the keyboard. Ticked items are struck through.
+- **Enter continues the list** you're in (`- `, `* `, `1. ` → `2. `, `- [ ] `, `> `); Enter on an
+  empty item ends the list. The rule lives in the core (`markdown::list_continuation`) for the
+  mobile apps; the web uses CodeMirror's equivalent command.
+- Web only, for now: images show inline in the editor.
+
 ## Web
 
 - Sidebar: mark + wordmark, ⌘K search, sync line; **Pinned**; **Tags** (with counts, "+" to create, right-click/⋯ to rename/recolour/delete); **Folders** tree with animated expand/collapse.

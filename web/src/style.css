@@ -489,6 +489,32 @@ button.crumb:hover { background: var(--hover); color: var(--text); }
 .pane { min-height: 0; min-width: 0; overflow: auto; }
 .editor-pane .cm-editor { height: 100%; }
 
+/* ---------- Live preview (editor) ---------- */
+.cm-lp-bullet { display: inline-block; width: 0.38em; height: 0.38em; border-radius: 50%; background: var(--faint); vertical-align: 0.2em; margin: 0 0.12em 0 0.1em; }
+.cm-lp-check {
+  display: inline-block; width: 1.05em; height: 1.05em; box-sizing: border-box; vertical-align: -0.17em;
+  margin-right: 0.15em; border: 1.5px solid var(--faint); border-radius: 0.3em; cursor: pointer; position: relative;
+  transition: background 0.12s var(--ease), border-color 0.12s var(--ease);
+}
+.cm-lp-check:hover { border-color: var(--accent); }
+.cm-lp-check.on { background: var(--accent); border-color: var(--accent); }
+.cm-lp-check.on::after {
+  content: ""; position: absolute; left: 0.27em; top: 0.13em; width: 0.26em; height: 0.5em;
+  border: solid #fff; border-width: 0 0.12em 0.12em 0; transform: rotate(45deg);
+}
+.cm-lp-done { color: var(--faint); text-decoration: line-through; text-decoration-color: var(--faint); }
+.cm-lp-link { color: var(--accent); font-weight: 500; }
+.cm-line.cm-lp-quote { border-left: 3px solid var(--accent); padding-left: 14px !important; color: var(--muted); }
+.cm-line.cm-lp-code { background: var(--code-bg); font-family: var(--mono); font-size: 0.9em; padding: 0 14px !important; }
+.cm-line.cm-lp-code-first { border-radius: 8px 8px 0 0; padding-top: 4px !important; }
+.cm-line.cm-lp-code-last { border-radius: 0 0 8px 8px; padding-bottom: 4px !important; }
+.cm-lp-fence { color: var(--faint); }
+.cm-lp-hr { display: inline-block; width: 100%; height: 1px; background: var(--border); vertical-align: middle; }
+.cm-lp-img { display: block; margin: 6px 0; }
+.cm-lp-img img { display: block; max-width: 100%; max-height: 420px; border-radius: var(--r-lg); }
+.cm-lp-img.loading { min-height: 120px; background: var(--chrome); border-radius: var(--r-lg); }
+.cm-lp-img.missing { color: var(--faint); font-size: 0.9em; }
+
 .image-view { align-items: center; justify-content: center; padding: 32px; background: var(--chrome); }
 .image-view figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 12px; max-width: 100%; max-height: 100%; }
 .image-view img { max-width: 100%; max-height: calc(100dvh - 160px); border-radius: var(--r-lg); box-shadow: var(--shadow); background: var(--surface); }

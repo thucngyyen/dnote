@@ -68,6 +68,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -82,6 +83,13 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
@@ -239,13 +247,30 @@ private fun Editor(model: NotesViewModel, session: EditorSession) {
             value = TextFieldValue(session.text, TextRange(cursor))
         }
     }
-    val transformation = remember(dn) { MarkdownTransformation(dn.faint, dn.muted, dn.hover, dn.accent) }
     val focus = remember { FocusRequester() }
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     var focused by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    fun update(next: TextFieldValue) {
+    // Live preview: syntax shows only on the line with the cursor (while editing).
+    val colors = remember(dn) { PreviewColors(dn.text, dn.muted, dn.faint, dn.accent, dn.hover, dn.border) }
+    val activeLine: TextRange? = if (!focused) null else {
+        val t = value.text
+        val a = t.lastIndexOf('\n', value.selection.min - 1) + 1
+        val b = t.indexOf('\n', value.selection.max).let { if (it < 0) t.length else it }
+        TextRange(a, b)
+    }
+    // Only the cursor's offset into the line's marker area changes how a line renders.
+    val cursorKey = if (activeLine == null) null else activeLine.start + minOf(value.selection.min - activeLine.start, 8)
+    val transformation = remember(colors, activeLine, cursorKey) {
+        LivePreviewTransformation(colors, activeLine, if (activeLine == null) null else value.selection.min)
+    }
+    val currentTransformation by rememberUpdatedState(transformation)
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val density = LocalDensity.current.density
+
+    fun update(raw: TextFieldValue) {
+        val next = continueList(value, raw)
         val changed = next.text != value.text
         value = next
         if (changed) {
@@ -274,6 +299,7 @@ private fun Editor(model: NotesViewModel, session: EditorSession) {
             value = value,
             onValueChange = ::update,
             visualTransformation = transformation,
+            onTextLayout = { layout = it },
             textStyle = MaterialTheme.typography.bodyLarge.copy(color = dn.text2, lineHeight = 26.sp, fontSize = 16.sp),
             cursorBrush = SolidColor(dn.accent),
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
@@ -282,6 +308,25 @@ private fun Editor(model: NotesViewModel, session: EditorSession) {
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 12.dp)
+                // Tapping a task box ticks it, without moving the cursor or opening the keyboard.
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(pass = PointerEventPass.Initial)
+                        val l = layout ?: return@awaitEachGesture
+                        val p = currentTransformation.last ?: return@awaitEachGesture
+                        val box = taskAt(p, l, down.position, density) ?: return@awaitEachGesture
+                        down.consume()
+                        val up = waitForUpOrCancellation(PointerEventPass.Initial) ?: return@awaitEachGesture
+                        up.consume()
+                        update(toggleTask(value, box))
+                    }
+                }
+                .drawWithContent {
+                    drawContent()
+                    val l = layout
+                    val p = transformation.last
+                    if (l != null && p != null && l.layoutInput.text == p.text.text) drawPreview(p, l, colors)
+                }
                 .focusRequester(focus)
                 .onFocusChanged { focused = it.isFocused },
         )
@@ -355,50 +400,6 @@ private fun link(v: TextFieldValue): TextFieldValue {
     val label = v.text.substring(s, e)
     val insert = "[$label](https://)"
     return TextFieldValue(v.text.substring(0, s) + insert + v.text.substring(e), TextRange(s + insert.length - 1))
-}
-
-/** Live Markdown highlighting; the raw Markdown stays visible (no offset changes). */
-private class MarkdownTransformation(
-    private val accent: Color,
-    private val muted: Color,
-    private val codeBg: Color,
-    private val linkColor: Color,
-) : VisualTransformation {
-    private val heading = Regex("^(#{1,6})\\s.*$", RegexOption.MULTILINE)
-    private val bold = Regex("(\\*\\*|__)(?=\\S)(.+?)(?<=\\S)\\1")
-    private val italic = Regex("(?<![*_\\w])([*_])(?=\\S)([^*_\\n]+?)(?<=\\S)\\1(?![*_\\w])")
-    private val code = Regex("`[^`\\n]+`")
-    private val fence = Regex("^```.*?^```[ \\t]*$", setOf(RegexOption.MULTILINE, RegexOption.DOT_MATCHES_ALL))
-    private val link = Regex("\\[([^\\]\\n]+)\\]\\(([^)\\n]+)\\)")
-    private val quote = Regex("^>.*$", RegexOption.MULTILINE)
-    private val list = Regex("^\\s*([-*+]|\\d+[.)])\\s(\\[[ xX]\\]\\s)?", RegexOption.MULTILINE)
-    private val done = Regex("^\\s*[-*+]\\s\\[[xX]\\]\\s(.*)$", RegexOption.MULTILINE)
-
-    override fun filter(text: AnnotatedString): TransformedText {
-        val s = text.text
-        val out = AnnotatedString.Builder(s)
-        heading.findAll(s).forEach { m ->
-            val level = m.groupValues[1].length
-            val size = listOf(1.5f, 1.3f, 1.15f, 1.05f, 1f, 1f)[level - 1]
-            out.addStyle(SpanStyle(fontWeight = FontWeight.SemiBold, fontSize = size.em, letterSpacing = (-0.02).em), m.range.first, m.range.last + 1)
-            out.addStyle(SpanStyle(color = accent.copy(alpha = 0.6f)), m.groups[1]!!.range.first, m.groups[1]!!.range.last + 1)
-        }
-        bold.findAll(s).forEach { out.addStyle(SpanStyle(fontWeight = FontWeight.Bold), it.range.first, it.range.last + 1) }
-        italic.findAll(s).forEach { out.addStyle(SpanStyle(fontStyle = FontStyle.Italic), it.range.first, it.range.last + 1) }
-        link.findAll(s).forEach { m ->
-            m.groups[1]?.let { out.addStyle(SpanStyle(color = linkColor, fontWeight = FontWeight.Medium), it.range.first, it.range.last + 1) }
-            m.groups[2]?.let { out.addStyle(SpanStyle(color = muted), it.range.first, it.range.last + 1) }
-        }
-        quote.findAll(s).forEach { out.addStyle(SpanStyle(color = muted), it.range.first, it.range.last + 1) }
-        list.findAll(s).forEach { out.addStyle(SpanStyle(color = accent), it.range.first, it.range.last + 1) }
-        done.findAll(s).forEach { m ->
-            m.groups[1]?.let { out.addStyle(SpanStyle(color = muted, textDecoration = TextDecoration.LineThrough), it.range.first, it.range.last + 1) }
-        }
-        (code.findAll(s) + fence.findAll(s)).forEach {
-            out.addStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBg, fontSize = 0.92.em), it.range.first, it.range.last + 1)
-        }
-        return TransformedText(out.toAnnotatedString(), OffsetMapping.Identity)
-    }
 }
 
 /** Read mode: HTML rendered by the shared Rust core; image and note links are vault paths. */

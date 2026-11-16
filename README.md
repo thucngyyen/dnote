@@ -39,8 +39,9 @@ plain files with a clunky sync story. DNote gives you both.
 
 ## Features
 
-- 📝 **Markdown, beautifully.** Live syntax highlighting while you write, a clean reading view, task
-  lists you can tick off, tables, code blocks.
+- 📝 **Markdown, without the symbols.** Write in a live preview: formatting renders as you type,
+  checkboxes are tappable, and lists continue when you press Enter. Underneath, it's still
+  plain Markdown.
 - 📁 **Folders that are folders.** Create, rename and move notes and folders; the structure on disk
   is exactly what you see.
 - 📌 **Pins** for the notes and folders you open every day.

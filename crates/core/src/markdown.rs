@@ -149,8 +149,90 @@ fn safe_url(url: CowStr<'_>) -> CowStr<'_> {
     }
 }
 
+/// What Enter should do inside a list or quote, given the text of the current line up to
+/// the cursor. Shared by the mobile editors so every app continues lists the same way.
+///
+/// * `None`: not in a list, insert a plain newline.
+/// * `Some("")`: the item is empty, so Enter ends the list (the marker is removed).
+/// * `Some(prefix)`: insert a newline followed by `prefix` (`"- "`, `"  3. "`, `"- [ ] "`, `"> "`).
+pub fn list_continuation(line_before_cursor: &str) -> Option<String> {
+    let line = line_before_cursor;
+    let indent_len = line.len() - line.trim_start_matches([' ', '\t']).len();
+    let (indent, rest) = line.split_at(indent_len);
+
+    // Quotes ("> text"), possibly holding a list ("> - item").
+    if let Some(inner) = rest.strip_prefix('>') {
+        let inner = inner.strip_prefix(' ').unwrap_or(inner);
+        if inner.trim().is_empty() {
+            return Some(String::new());
+        }
+        let nested = list_continuation(inner)
+            .filter(|p| !p.is_empty())
+            .unwrap_or_default();
+        return Some(format!("{indent}> {nested}"));
+    }
+
+    // Bullets: "- ", "* ", "+ ", optionally with a task box.
+    let (marker, after) =
+        if let Some(c) = rest.chars().next().filter(|c| matches!(c, '-' | '*' | '+')) {
+            let after = rest[1..].strip_prefix(' ')?;
+            (c.to_string(), after)
+        } else {
+            // Ordered: "1. " or "1) ".
+            let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            if digits == 0 || digits > 9 {
+                return None;
+            }
+            let n: u64 = rest[..digits].parse().ok()?;
+            let delim = rest[digits..]
+                .chars()
+                .next()
+                .filter(|c| matches!(c, '.' | ')'))?;
+            let after = rest[digits + 1..].strip_prefix(' ')?;
+            let is_empty = after.trim().is_empty();
+            if is_empty {
+                return Some(String::new());
+            }
+            return Some(format!("{indent}{}{delim} ", n + 1));
+        };
+    let (task, text) = match after.get(..3) {
+        Some("[ ]") | Some("[x]") | Some("[X]") => {
+            (true, after[3..].strip_prefix(' ').unwrap_or(&after[3..]))
+        }
+        _ => (false, after),
+    };
+    if text.trim().is_empty() {
+        return Some(String::new());
+    }
+    Some(if task {
+        format!("{indent}{marker} [ ] ")
+    } else {
+        format!("{indent}{marker} ")
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn continues_lists() {
+        use super::list_continuation as c;
+        assert_eq!(c("plain text"), None);
+        assert_eq!(c("-not a list"), None);
+        assert_eq!(c("- milk").as_deref(), Some("- "));
+        assert_eq!(c("  * nested").as_deref(), Some("  * "));
+        assert_eq!(c("- [x] done").as_deref(), Some("- [ ] "));
+        assert_eq!(c("- [ ] todo").as_deref(), Some("- [ ] "));
+        assert_eq!(c("9. nine").as_deref(), Some("10. "));
+        assert_eq!(c("3) three").as_deref(), Some("4) "));
+        assert_eq!(c("> quote").as_deref(), Some("> "));
+        assert_eq!(c("> - in quote").as_deref(), Some("> - "));
+        // Empty items end the list.
+        for empty in ["- ", "- [ ] ", "1. ", "> ", "  - "] {
+            assert_eq!(c(empty).as_deref(), Some(""), "{empty:?}");
+        }
+        assert_eq!(c("2024. was a year"), Some("2025. ".into()));
+    }
+
     #[test]
     fn escapes_html() {
         let out = super::to_html("# Hi\n\n<script>alert(1)</script>\n\n- [x] done");
